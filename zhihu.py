@@ -5,6 +5,7 @@ import json
 import time
 import random
 import pickle
+from attr import has
 import requests
 import platform
 import termcolor
@@ -19,7 +20,17 @@ header = {
 
 # --- #
 
-class User:
+class Obj:
+    def properties(self, name, cmd):
+        if not hasattr(self, f'__{name}'):
+            value = eval(cmd)
+            setattr(self, f'__{name}', value)
+        else:
+            value = getattr(self, f'__{name}')
+        
+        return value
+
+class User(Obj):
     def __init__(self, id = None):
         if id == None:
             self.id = None # Anonymous User
@@ -30,26 +41,15 @@ class User:
             else:    
                 matchobj = re.compile('^[^/]*$').search(id)
                 if matchobj:
-                    self.id = matchobj.group()        
+                    self.id = matchobj.group()
                 else:
-                    raise ValueError(f'{termcolor.colored("ERROR", "red")}: unrecognized id: {id}')
+                    raise ValueError(f'{termcolor.colored("ERROR", "red")}: unrecognized id for User: {id}')
 
         self.url = f'https://www.zhihu.com/people/{self.id}'
 
     def __bool__(self):
         return self.id != None
-
-    def properties(self, name, cmd):
-        if not hasattr(self, f'__{name}'):
-            value = eval(cmd)
-            setattr(self, f'__{name}', value)
-        else:
-            value = getattr(self, f'__{name}')
-        
-        return value
     
-    # --- #
-
     @property
     def soup(self):
         return self.properties(__name__, "BeautifulSoup(requests.get(self.url, headers = header).content, 'lxml')")
@@ -152,408 +152,96 @@ class User:
     @property
     def favlistCount(self):
         return self.properties(__name__, "int(self.soup.find('div', class_ = 'Profile-mainColumn').find('ul', class_ = 'Tabs ProfileMain-tabs').find_all('span')[6].text)")
+
+class Question(Obj):
+    def __init__(self, id):
+        # https://www.zhihu.com/question/546178692
+        matchobj = re.compile('www.zhihu.com/question/(\d*)/?').search(id)
+        if matchobj:
+            self.id = matchobj.group(1)
+        else:    
+            matchobj = re.compile('^\d*$').search(id)
+            if matchobj:
+                self.id = matchobj.group()
+            else:
+                raise ValueError(f'{termcolor.colored("ERROR", "red")}: unrecognized id for Question: {id}')
+
+        self.url = f'https://www.zhihu.com/question/{self.id}'
+
+    @property
+    def soup(self):
+        return self.properties(__name__, "BeautifulSoup(requests.get(self.url, headers = header).content, 'lxml')")
     
     # --- #
+
+    # meta
+
+    @property
+    def title(self):
+        return self.properties(__name__, "self.soup.find('meta', itemprop = 'name')['content']")
+    @property
+    def answerCount(self):
+        return self.properties(__name__, "self.soup.find('meta', itemprop = 'answerCount')['content']")
+    @property
+    def commentCount(self):
+        return self.properties(__name__, "self.soup.find('meta', itemprop = 'commentCount')['content']")
+    @property
+    def dateCreated(self):
+        return self.properties(__name__, "self.soup.find('meta', itemprop = 'dateCreated')['content']")
+    @property
+    def dateCreated(self):
+        return self.properties(__name__, "self.soup.find('meta', itemprop = 'dateCreated')['content']")
+    @property
+    def followerCount(self):
+        return self.properties(__name__, "self.soup.find('meta', itemprop = 'zhihu:followerCount')['content']")
+
+    # --- #
+
+    # data-zop-question
+
+    @property
+    def topics(self):
+        if not hasattr(self, '__topics'):
+            topics = json.loads(self.soup.find('div', class_ = 'QuestionPage').find('div')['data-zop-question'])['topics']
+            topics = [[t['name'], int(t['id'])] for t in topics]
+            setattr(self, '__topics', topics)
+        return getattr(self, '__topics')
+
+    # --- #
+
+    # js-initialData
     
+    @property
+    def detail(self):
+        if not hasattr(self, '__detail'):
+            detail = json.loads(self.soup.find('script', id = 'js-initialData').text)['initialState']['entities']['questions'][self.id]['detail']
+            
+            detail = detail[3:-4]
+            detail = re.compile('</p><p>').sub('\n', detail)
+            
+            # convert math expressions into tex style
+            imgs = [img.group() for img in re.compile('<img.*?/>').finditer(detail)]
+            exps = ['$' + re.compile('alt="(.*?)"').search(img).group(1) + '$' for img in imgs]
+            for img, exp in zip(imgs, exps):
+                detail = detail.replace(img, exp)
 
-#     def get_followees_num(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return 0
-#         else:
-#             if self.soup == None:
-#                 self.parser()
-#             soup = self.soup
-#             followees_num = int(soup.find("div", class_="zm-profile-side-following zg-clear") \
-#                                 .find("a").strong.string)
-#             return followees_num
+            setattr(self, '__detail', detail)
+        return getattr(self, '__detail')
 
-#     def get_followers_num(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return 0
-#         else:
-#             if self.soup == None:
-#                 self.parser()
-#             soup = self.soup
-#             followers_num = int(soup.find("div", class_="zm-profile-side-following zg-clear") \
-#                                 .find_all("a")[1].strong.string)
-#             return followers_num
+    # --- #
 
-#     def get_topics_num(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return 0
-#         else:
-#             if self.soup == None:
-#                 self.parser()
-#             soup = self.soup
-#             topics_num = soup.find_all("div", class_="zm-profile-side-section-title")[-1].strong.string.encode("utf-8")
-#             I=''
-#             for i in topics_num:
-#                 if i.isdigit():
-#                     I=I+i
-#             topics_num=int(I)
-#             return topics_num       
+    def answeriter(self):
+        url = f'https://www.zhihu.com/api/v4/questions/{self.id}/feeds?&limit=5&offset=0&order=default&platform=desktop'
+        while True:
+            data = json.loads(requests.get(url, headers = header).text)
+            
+            for answerid in [d['target']['id'] for d in data['data']]:
+                yield answerid
+            
+            if data['paging']['is_end']:
+                return
 
-#     def get_agree_num(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return 0
-#         else:
-#             if self.soup == None:
-#                 self.parser()
-#             soup = self.soup
-#             agree_num = int(soup.find("span", class_="zm-profile-header-user-agree").strong.string)
-#             return agree_num
-
-#     def get_thanks_num(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return 0
-#         else:
-#             if self.soup == None:
-#                 self.parser()
-#             soup = self.soup
-#             thanks_num = int(soup.find("span", class_="zm-profile-header-user-thanks").strong.string)
-#             return thanks_num
-
-#     def get_asks_num(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return 0
-#         else:
-#             if self.soup == None:
-#                 self.parser()
-#             soup = self.soup
-#             asks_num = int(soup.find_all("span", class_="num")[0].string)
-#             return asks_num
-
-#     def get_answers_num(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return 0
-#         else:
-#             if self.soup == None:
-#                 self.parser()
-#             soup = self.soup
-#             answers_num = int(soup.find_all("span", class_="num")[1].string)
-#             return answers_num
-
-#     def get_collections_num(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return 0
-#         else:
-#             if self.soup == None:
-#                 self.parser()
-#             soup = self.soup
-#             collections_num = int(soup.find_all("span", class_="num")[3].string)
-#             return collections_num
-
-#     def get_followees(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return
-#             yield
-#         else:
-#             followees_num = self.get_followees_num()
-#             if followees_num == 0:
-#                 return
-#                 yield
-#             else:
-#                 followee_url = self.user_url + "/followees"
-#                 headers = {
-#                     'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36",
-#                     'Host': "www.zhihu.com",
-#                     'Origin': "http://www.zhihu.com",
-#                     'Pragma': "no-cache",
-#                     'Referer': "http://www.zhihu.com/"
-#                 }
-#                 r = requests.get(followee_url, headers=headers, verify=False)
-
-#                 soup = BeautifulSoup(r.content, "lxml")
-#                 for i in xrange((followees_num - 1) / 20 + 1):
-#                     if i == 0:
-#                         user_url_list = soup.find_all("h2", class_="zm-list-content-title")
-#                         for j in xrange(min(followees_num, 20)):
-#                             yield User(user_url_list[j].a["href"], user_url_list[j].a.string.encode("utf-8"))
-#                     else:
-#                         post_url = "http://www.zhihu.com/node/ProfileFolloweesListV2"
-#                         _xsrf = soup.find("input", attrs={'name': '_xsrf'})["value"]
-#                         offset = i * 20
-#                         hash_id = re.findall("hash_id&quot;: &quot;(.*)&quot;},", r.text)[0]
-#                         params = json.dumps({"offset": offset, "order_by": "created", "hash_id": hash_id})
-#                         data = {
-#                             '_xsrf': _xsrf,
-#                             'method': "next",
-#                             'params': params
-#                         }
-#                         header = {
-#                             'User-Agent': "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:34.0) Gecko/20100101 Firefox/34.0",
-#                             'Host': "www.zhihu.com",
-#                             'Referer': followee_url
-#                         }
-
-#                         r_post = requests.post(post_url, data=data, headers=header, verify=False)
-
-#                         followee_list = r_post.json()["msg"]
-#                         for j in xrange(min(followees_num - i * 20, 20)):
-#                             followee_soup = BeautifulSoup(followee_list[j], "lxml")
-#                             user_link = followee_soup.find("h2", class_="zm-list-content-title").a
-#                             yield User(user_link["href"], user_link.string.encode("utf-8"))
-
-#     def get_followers(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return
-#             yield
-#         else:
-#             followers_num = self.get_followers_num()
-#             if followers_num == 0:
-#                 return
-#                 yield
-#             else:
-#                 follower_url = self.user_url + "/followers"
-#                 headers = {
-#                     'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36",
-#                     'Host': "www.zhihu.com",
-#                     'Origin': "http://www.zhihu.com",
-#                     'Pragma': "no-cache",
-#                     'Referer': "http://www.zhihu.com/"
-#                 }
-#                 r = requests.get(follower_url, headers=headers, verify=False)
-
-#                 soup = BeautifulSoup(r.content, "lxml")
-#                 for i in xrange((followers_num - 1) / 20 + 1):
-#                     if i == 0:
-#                         user_url_list = soup.find_all("h2", class_="zm-list-content-title")
-#                         for j in xrange(min(followers_num, 20)):
-#                             yield User(user_url_list[j].a["href"], user_url_list[j].a.string.encode("utf-8"))
-#                     else:
-#                         post_url = "http://www.zhihu.com/node/ProfileFollowersListV2"
-#                         _xsrf = soup.find("input", attrs={'name': '_xsrf'})["value"]
-#                         offset = i * 20
-#                         hash_id = re.findall("hash_id&quot;: &quot;(.*)&quot;},", r.text)[0]
-#                         params = json.dumps({"offset": offset, "order_by": "created", "hash_id": hash_id})
-#                         data = {
-#                             '_xsrf': _xsrf,
-#                             'method': "next",
-#                             'params': params
-#                         }
-#                         header = {
-#                             'User-Agent': "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:34.0) Gecko/20100101 Firefox/34.0",
-#                             'Host': "www.zhihu.com",
-#                             'Referer': follower_url
-#                         }
-#                         r_post = requests.post(post_url, data=data, headers=header, verify=False)
-
-#                         follower_list = r_post.json()["msg"]
-#                         for j in xrange(min(followers_num - i * 20, 20)):
-#                             follower_soup = BeautifulSoup(follower_list[j], "lxml")
-#                             user_link = follower_soup.find("h2", class_="zm-list-content-title").a
-#                             yield User(user_link["href"], user_link.string.encode("utf-8"))
-
-#     def get_topics(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return
-#             yield
-#         else:
-#             topics_num = self.get_topics_num()
-#             # print topics_num
-#             if topics_num == 0:
-#                 return
-#                 yield
-#             else:
-#                 topics_url = self.user_url + "/topics"
-#                 headers = {
-#                     'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36",
-#                     'Host': "www.zhihu.com",
-#                     'Origin': "http://www.zhihu.com",
-#                     'Pragma': "no-cache",
-#                     'Referer': "http://www.zhihu.com/"
-#                 }
-#                 r = requests.get(topics_url, headers=headers, verify=False)
-#                 soup = BeautifulSoup(r.content, "lxml")
-#                 for i in xrange((topics_num - 1) / 20 + 1):
-#                     if i == 0:
-#                         topic_list = soup.find_all("div", class_="zm-profile-section-item zg-clear")
-#                         for j in xrange(min(topics_num, 20)):
-#                             yield topic_list[j].find("strong").string.encode("utf-8")
-#                     else:
-#                         post_url = topics_url
-#                         _xsrf = soup.find("input", attrs={'name': '_xsrf'})["value"]
-#                         offset = i * 20
-#                         data = {
-#                             '_xsrf': _xsrf,
-#                             'offset': offset,
-#                             'start': 0
-#                         }
-#                         header = {
-#                             'User-Agent': "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:34.0) Gecko/20100101 Firefox/34.0",
-#                             'Host': "www.zhihu.com",
-#                             'Referer': topics_url
-#                         }
-#                         r_post = requests.post(post_url, data=data, headers=header, verify=False)
-
-#                         topic_data = r_post.json()["msg"][1]
-#                         topic_soup = BeautifulSoup(topic_data, "lxml")
-#                         topic_list = topic_soup.find_all("div", class_="zm-profile-section-item zg-clear")
-#                         for j in xrange(min(topics_num - i * 20, 20)):
-#                             yield topic_list[j].find("strong").string.encode("utf-8")
-
-#     def get_asks(self):
-#         """
-#             By ecsys (https://github.com/ecsys)
-#             增加了获取某用户所有赞过答案的功能 #29
-#             (https://github.com/egrcc/zhihu-python/pull/29)
-#         """
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return
-#             yield
-#         else:
-#             asks_num = self.get_asks_num()
-#             if asks_num == 0:
-#                 return
-#                 yield
-#             else:
-#                 for i in xrange((asks_num - 1) / 20 + 1):
-#                     ask_url = self.user_url + "/asks?page=" + str(i + 1)
-#                     headers = {
-#                         'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36",
-#                         'Host': "www.zhihu.com",
-#                         'Origin': "http://www.zhihu.com",
-#                         'Pragma': "no-cache",
-#                         'Referer': "http://www.zhihu.com/"
-#                     }
-#                     r = requests.get(ask_url, headers=headers, verify=False)
-
-#                     soup = BeautifulSoup(r.content, "lxml")
-#                     for question in soup.find_all("a", class_="question_link"):
-#                         url = "http://www.zhihu.com" + question["href"]
-#                         title = question.string.encode("utf-8")
-#                         yield Question(url, title)
-
-#     def get_answers(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return
-#             yield
-#         else:
-#             answers_num = self.get_answers_num()
-#             if answers_num == 0:
-#                 return
-#                 yield
-#             else:
-#                 for i in xrange((answers_num - 1) / 20 + 1):
-#                     answer_url = self.user_url + "/answers?page=" + str(i + 1)
-#                     headers = {
-#                         'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36",
-#                         'Host': "www.zhihu.com",
-#                         'Origin': "http://www.zhihu.com",
-#                         'Pragma': "no-cache",
-#                         'Referer': "http://www.zhihu.com/"
-#                     }
-#                     r = requests.get(answer_url, headers=headers, verify=False)
-#                     soup = BeautifulSoup(r.content, "lxml")
-#                     for answer in soup.find_all("a", class_="question_link"):
-#                         question_url = "http://www.zhihu.com" + answer["href"][0:18]
-#                         question_title = answer.string.encode("utf-8")
-#                         question = Question(question_url, question_title)
-#                         yield Answer("http://www.zhihu.com" + answer["href"], question, self)
-
-#     def get_collections(self):
-#         if self.user_url == None:
-#             print "I'm anonymous user."
-#             return
-#             yield
-#         else:
-#             collections_num = self.get_collections_num()
-#             if collections_num == 0:
-#                 return
-#                 yield
-#             else:
-#                 for i in xrange((collections_num - 1) / 20 + 1):
-#                     collection_url = self.user_url + "/collections?page=" + str(i + 1)
-#                     headers = {
-#                         'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36",
-#                         'Host': "www.zhihu.com",
-#                         'Origin': "http://www.zhihu.com",
-#                         'Pragma': "no-cache",
-#                         'Referer': "http://www.zhihu.com/"
-#                     }
-#                     r = requests.get(collection_url, headers=headers, verify=False)
-
-#                     soup = BeautifulSoup(r.content, "lxml")
-#                     for collection in soup.find_all("div", class_="zm-profile-section-item zg-clear"):
-#                         url = "http://www.zhihu.com" + \
-#                               collection.find("a", class_="zm-profile-fav-item-title")["href"]
-#                         name = collection.find("a", class_="zm-profile-fav-item-title").string.encode("utf-8")
-#                         yield Collection(url, name, self)
-
-
-#     def get_likes(self):
-#         # This function only handles liked answers, not including zhuanlan articles
-#         if self.user_url == None:
-#             print "I'm an anonymous user."
-#             return
-#             yield
-#         else:
-#             headers = {
-#                 'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36",
-#                 'Host': "www.zhihu.com",
-#                 'Origin': "http://www.zhihu.com",
-#                 'Pragma': "no-cache",
-#                 'Referer': "http://www.zhihu.com/"
-#             }
-#             r = requests.get(self.user_url, headers=headers, verify=False)
-#             soup = BeautifulSoup(r.content, "lxml")
-#             # Handle the first liked item
-#             first_item = soup.find("div", attrs={'class':'zm-profile-section-item zm-item clearfix'})
-#             first_item = first_item.find("div", attrs={'class':'zm-profile-section-main zm-profile-section-activity-main zm-profile-activity-page-item-main'})
-#             if u"赞同了回答" in str(first_item):
-#                 first_like = first_item.find("a")['href']
-#                 yield Answer("http://www.zhihu.com" + first_like)
-#             # Handle the rest liked items
-#             post_url = self.user_url + "/activities"
-#             start_time = soup.find("div", attrs={'class':'zm-profile-section-item zm-item clearfix'})["data-time"]
-#             _xsrf = soup.find("input", attrs={'name': '_xsrf'})["value"]
-#             data = {
-#                 'start': start_time,
-#                 '_xsrf': _xsrf,
-#             }
-#             header = {
-#                 'Host': "www.zhihu.com",
-#                 'Referer': self.user_url,
-#                 'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.101 Safari/537.36",
-#             }
-#             r = requests.post(post_url, data=data, headers=header, verify=False)
-#             response_size = r.json()["msg"][0]
-#             response_html = r.json()["msg"][1]
-#             while response_size > 0:
-#                 all_liked_answers = re.findall(u"\u8d5e\u540c\u4e86\u56de\u7b54\n\n<a class=\"question_link\" target=\"_blank\" href=\"\/question\/\d{8}\/answer\/\d{8}", response_html)
-#                 liked_answers = list(set(all_liked_answers))
-#                 liked_answers.sort(key=all_liked_answers.index)
-#                 for i in xrange(len(liked_answers)):
-#                     answer_url = "http://www.zhihu.com" + liked_answers[i][54:]
-#                     yield Answer(answer_url)
-#                 data_times = re.findall(r"data-time=\"\d+\"", response_html)
-#                 if len(data_times) != response_size:
-#                     print "读取activities栏时间信息时发生错误，可能因为某答案中包含data-time信息"
-#                     return
-#                     yield
-#                 latest_data_time = re.search(r"\d+", data_times[response_size - 1]).group()
-#                 data = {
-#                 'start': latest_data_time,
-#                 '_xsrf': _xsrf,
-#                 }
-#                 r = requests.post(post_url, data=data, headers=header, verify=False)
-#                 response_size = r.json()["msg"][0]
-#                 response_html = r.json()["msg"][1]
-#             return
-#             yield
+            url = data['paging']['next']
 
 # class Answer:
 #     answer_url = None
@@ -930,241 +618,7 @@ class User:
 #         topic_list = []
 #         for topic in meta['topics']:
 #             topic_list.append(topic['name'])
-#         return topic_list
-      
-# class Question:
-#     url = None
-#     soup = None
-
-#     def __init__(self, url, title=None):
-
-#         if not re.compile(r"(http|https)://www.zhihu.com/question/\d{8}").match(url):
-#             raise ValueError("\"" + url + "\"" + " : it isn't a question url.")
-#         else:
-#             self.url = url
-
-#         if title != None: self.title = title
-
-#     def parser(self):
-#         headers = {
-#             'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36",
-#             'Host': "www.zhihu.com",
-#             'Origin': "http://www.zhihu.com",
-#             'Pragma': "no-cache",
-#             'Referer': "http://www.zhihu.com/"
-#         }
-#         r = requests.get(self.url,headers=headers, verify=False)
-#         self.soup = BeautifulSoup(r.content, "lxml")
-
-#     def get_title(self):
-#         if hasattr(self, "title"):
-#             if platform.system() == 'Windows':
-#                 title = self.title.decode('utf-8').encode('gbk')
-#                 return title
-#             else:
-#                 return self.title
-#         else:
-#             if self.soup == None:
-#                 self.parser()
-#             soup = self.soup
-#             title = soup.find("h2", class_="zm-item-title").string.encode("utf-8").replace("\n", "")
-#             self.title = title
-#             if platform.system() == 'Windows':
-#                 title = title.decode('utf-8').encode('gbk')
-#                 return title
-#             else:
-#                 return title
-
-#     def get_detail(self):
-#         if self.soup == None:
-#             self.parser()
-#         soup = self.soup
-#         detail = soup.find("div", id="zh-question-detail").div.get_text().encode("utf-8")
-#         if platform.system() == 'Windows':
-#             detail = detail.decode('utf-8').encode('gbk')
-#             return detail
-#         else:
-#             return detail
-
-#     def get_answers_num(self):
-#         if self.soup == None:
-#             self.parser()
-#         soup = self.soup
-#         answers_num = 0
-#         if soup.find("h3", id="zh-question-answer-num") != None:
-#             answers_num = int(soup.find("h3", id="zh-question-answer-num")["data-num"])
-#         return answers_num
-
-#     def get_followers_num(self):
-#         if self.soup == None:
-#             self.parser()
-#         soup = self.soup
-#         followers_num = int(soup.find("div", class_="zg-gray-normal").a.strong.string)
-#         return followers_num
-
-#     def get_topics(self):
-#         if self.soup == None:
-#             self.parser()
-#         soup = self.soup
-#         topic_list = soup.find_all("a", class_="zm-item-tag")
-#         topics = []
-#         for i in topic_list:
-#             topic = i.contents[0].encode("utf-8").replace("\n", "")
-#             if platform.system() == 'Windows':
-#                 topic = topic.decode('utf-8').encode('gbk')
-#             topics.append(topic)
-#         return topics
-
-#     def get_all_answers(self):
-#         answers_num = self.get_answers_num()
-#         if answers_num == 0:
-#             print "No answer."
-#             return
-#             yield
-#         else:
-#             error_answer_count = 0
-#             my_answer_count = 0
-#             for i in xrange((answers_num - 1) / 20 + 1):
-#                 if i == 0:
-#                     for j in xrange(min(answers_num, 20)):
-#                         if self.soup == None:
-#                             self.parser()
-#                         soup = BeautifulSoup(self.soup.encode("utf-8"), "lxml")
-
-#                         is_my_answer = False
-#                         if soup.find_all("div", class_="zm-item-answer")[j].find("span", class_="count") == None:
-#                             my_answer_count += 1
-#                             is_my_answer = True
-
-#                         if soup.find_all("div", class_="zm-item-answer")[j].find("div", class_="zm-editable-content clearfix") == None:
-#                             error_answer_count += 1
-#                             continue
-#                         author = None
-#                         if soup.find_all("div", class_="zm-item-answer-author-info")[j].get_text(strip='\n') == u"匿名用户":
-#                             author_url = None
-#                             author = User(author_url)
-#                         else:
-#                             author_tag = soup.find_all("div", class_="zm-item-answer-author-info")[j].find_all("a")[1]
-#                             author_id = author_tag.string.encode("utf-8")
-#                             author_url = "http://www.zhihu.com" + author_tag["href"]
-#                             author = User(author_url, author_id)
-
-#                         if is_my_answer == True:
-#                             count = soup.find_all("div", class_="zm-item-answer")[j].find("a", class_="zm-item-vote-count").string
-#                         else:
-#                             count = soup.find_all("span", class_="count")[j - my_answer_count].string
-#                         if count[-1] == "K":
-#                             upvote = int(count[0:(len(count) - 1)]) * 1000
-#                         elif count[-1] == "W":
-#                             upvote = int(count[0:(len(count) - 1)]) * 10000
-#                         else:
-#                             upvote = int(count)
-
-#                         answer_url = "http://www.zhihu.com" + soup.find_all("a", class_="answer-date-link")[j]["href"]
-
-#                         answer = soup.find_all("div", class_="zm-editable-content clearfix")[j - error_answer_count]
-#                         soup.body.extract()
-#                         soup.head.insert_after(soup.new_tag("body", **{'class': 'zhi'}))
-#                         soup.body.append(answer)
-#                         img_list = soup.find_all("img", class_="content_image lazy")
-#                         for img in img_list:
-#                             img["src"] = img["data-actualsrc"]
-#                         img_list = soup.find_all("img", class_="origin_image zh-lightbox-thumb lazy")
-#                         for img in img_list:
-#                             img["src"] = img["data-actualsrc"]
-#                         noscript_list = soup.find_all("noscript")
-#                         for noscript in noscript_list:
-#                             noscript.extract()
-#                         content = soup
-#                         answer = Answer(answer_url, self, author, upvote, content)
-#                         yield answer
-#                 else:
-#                     post_url = "http://www.zhihu.com/node/QuestionAnswerListV2"
-#                     _xsrf = self.soup.find("input", attrs={'name': '_xsrf'})["value"]
-#                     offset = i * 20
-#                     params = json.dumps(
-#                         {"url_token": int(self.url[-8:-1] + self.url[-1]), "pagesize": 20, "offset": offset})
-#                     data = {
-#                         '_xsrf': _xsrf,
-#                         'method': "next",
-#                         'params': params
-#                     }
-#                     header = {
-#                         'User-Agent': "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:34.0) Gecko/20100101 Firefox/34.0",
-#                         'Host': "www.zhihu.com",
-#                         'Referer': self.url
-#                     }
-#                     r = requests.post(post_url, data=data, headers=header, verify=False)
-
-#                     answer_list = r.json()["msg"]
-#                     for j in xrange(min(answers_num - i * 20, 20)):
-#                         soup = BeautifulSoup(self.soup.encode("utf-8"), "lxml")
-
-#                         answer_soup = BeautifulSoup(answer_list[j], "lxml")
-
-#                         if answer_soup.find("div", class_="zm-editable-content clearfix") == None:
-#                             continue
-
-#                         author = None
-#                         if answer_soup.find("div", class_="zm-item-answer-author-info").get_text(strip='\n') == u"匿名用户":
-#                             author_url = None
-#                             author = User(author_url)
-#                         else:
-#                             author_tag = answer_soup.find("div", class_="zm-item-answer-author-info").find_all("a")[1]
-#                             author_id = author_tag.string.encode("utf-8")
-#                             author_url = "http://www.zhihu.com" + author_tag["href"]
-#                             author = User(author_url, author_id)
-
-#                         if answer_soup.find("span", class_="count") == None:
-#                             count = answer_soup.find("a", class_="zm-item-vote-count").string
-#                         else:
-#                             count = answer_soup.find("span", class_="count").string
-#                         if count[-1] == "K":
-#                             upvote = int(count[0:(len(count) - 1)]) * 1000
-#                         elif count[-1] == "W":
-#                             upvote = int(count[0:(len(count) - 1)]) * 10000
-#                         else:
-#                             upvote = int(count)
-
-#                         answer_url = "http://www.zhihu.com" + answer_soup.find("a", class_="answer-date-link")["href"]
-
-#                         answer = answer_soup.find("div", class_="zm-editable-content clearfix")
-#                         soup.body.extract()
-#                         soup.head.insert_after(soup.new_tag("body", **{'class': 'zhi'}))
-#                         soup.body.append(answer)
-#                         img_list = soup.find_all("img", class_="content_image lazy")
-#                         for img in img_list:
-#                             img["src"] = img["data-actualsrc"]
-#                         img_list = soup.find_all("img", class_="origin_image zh-lightbox-thumb lazy")
-#                         for img in img_list:
-#                             img["src"] = img["data-actualsrc"]
-#                         noscript_list = soup.find_all("noscript")
-#                         for noscript in noscript_list:
-#                             noscript.extract()
-#                         content = soup
-#                         answer = Answer(answer_url, self, author, upvote, content)
-#                         yield answer
-
-#     def get_top_i_answers(self, n):
-#         # if n > self.get_answers_num():
-#         # n = self.get_answers_num()
-#         j = 0
-#         answers = self.get_all_answers()
-#         for answer in answers:
-#             j = j + 1
-#             if j > n:
-#                 break
-#             yield answer
-
-#     def get_top_answer(self):
-#         for answer in self.get_top_i_answers(1):
-#             return answer
-
-#     def get_visit_times(self):
-#         if self.soup == None:
-#             self.parser()
-#         soup = self.soup
-#         return int(soup.find("meta", itemprop="visitsCount")["content"])
+#         return topic_list      
 
 # class Column:
 #     url = None
@@ -1401,9 +855,4 @@ class User:
 #             if j > n:
 #                 break
 #             yield answer
-
-
-# %%
-
-
 
